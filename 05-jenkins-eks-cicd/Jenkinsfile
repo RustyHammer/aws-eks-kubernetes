@@ -1,0 +1,59 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_REPO = 'rustyhammer/java-maven-app'
+        IMAGE_TAG = "${BUILD_NUMBER}-${GIT_COMMIT.take(7)}"
+    }
+
+    stages {
+        stage('Build JAR') {
+            steps {
+                script {
+                    echo 'Building the application...'
+                    sh 'mvn clean package -DskipTests'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "Building Docker image: ${DOCKER_HUB_REPO}:${IMAGE_TAG}"
+                    sh "docker build -t ${DOCKER_HUB_REPO}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker-hub-credentials',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+                        sh "docker push ${DOCKER_HUB_REPO}:${IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            environment {
+                AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+                AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+                APP_NAME = 'java-maven-app'
+                IMAGE_NAME = "${DOCKER_HUB_REPO}:${IMAGE_TAG}"
+            }
+            steps {
+                script {
+                    echo 'Deploying to EKS cluster...'
+                    sh 'envsubst < kubernetes/deployment.yaml | kubectl apply -f -'
+                    sh 'kubectl apply -f kubernetes/service.yaml'
+                }
+            }
+        }
+    }
+}
